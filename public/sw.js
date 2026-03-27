@@ -1,8 +1,6 @@
-const CACHE_NAME = 'stackpack-v2';
-const STATIC_ASSETS = ['/', '/index.html'];
+const CACHE_NAME = 'stackpack-v3';
 
-self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS)));
+self.addEventListener('install', () => {
   self.skipWaiting();
 });
 
@@ -18,20 +16,47 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Only cache GET requests
   if (event.request.method !== 'GET') return;
 
+  const url = new URL(event.request.url);
+
+  // Navigation requests (index.html) — always fetch from network so users
+  // always get the latest HTML with correct asset hashes.
+  // Fall back to cache only when offline.
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request).catch(() => caches.match('/index.html'))
+    );
+    return;
+  }
+
+  // Hashed assets (/assets/*) are immutable — safe to cache forever.
+  if (url.pathname.startsWith('/assets/')) {
+    event.respondWith(
+      caches.match(event.request).then((cached) => {
+        if (cached) return cached;
+        return fetch(event.request).then((response) => {
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return response;
+        });
+      })
+    );
+    return;
+  }
+
+  // Other static files — network first, cache as fallback.
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request).then((response) => {
-        // Cache static assets only
-        if (response.ok && event.request.url.includes(self.location.origin)) {
+    fetch(event.request)
+      .then((response) => {
+        if (response.ok && url.origin === self.location.origin) {
           const clone = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
         }
         return response;
-      });
-    })
+      })
+      .catch(() => caches.match(event.request))
   );
 });
